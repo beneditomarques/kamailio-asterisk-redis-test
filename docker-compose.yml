@@ -1,0 +1,77 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    networks:
+      - voip-net
+
+  kamailio:
+    build:
+      context: ./kamailio
+      dockerfile: Dockerfile    
+    container_name: kamailio
+    ports:
+      - "5060:5060/udp"
+      - "5060:5060/tcp"
+    volumes:
+      - ./kamailio/kamailio.cfg:/etc/kamailio/kamailio.cfg:ro
+      - ./kamailio/dispatcher.list:/etc/kamailio/dispatcher.list
+      - ./kamailio/update_reg_redis.lua:/etc/kamailio/update_reg_redis.lua:ro
+    networks:
+      - voip-net
+    depends_on:
+      - redis      
+    restart: unless-stopped
+    command: kamailio -m 512 -M 32 -f /etc/kamailio/kamailio.cfg
+
+  asterisk1:
+    build:
+      context: ./asterisk1
+      dockerfile: Dockerfile        
+    container_name: asterisk1
+    volumes:
+      - ./asterisk1/asterisk.conf:/etc/asterisk/asterisk.conf
+      - ./asterisk1/extensions.conf:/etc/asterisk/extensions.conf
+      - ./asterisk1/modules.conf:/etc/asterisk/modules.conf
+      - ./asterisk1/pjsip.conf:/etc/asterisk/pjsip.conf
+      - ./asterisk1/manager.conf:/etc/asterisk/manager.conf
+    networks:
+      - voip-net
+    restart: unless-stopped
+
+  asterisk2:
+    build:
+      context: ./asterisk2
+      dockerfile: Dockerfile        
+    container_name: asterisk2
+    volumes:
+      - ./asterisk2/asterisk.conf:/etc/asterisk/asterisk.conf
+      - ./asterisk2/extensions.conf:/etc/asterisk/extensions.conf
+      - ./asterisk2/modules.conf:/etc/asterisk/modules.conf
+      - ./asterisk2/manager.conf:/etc/asterisk/manager.conf
+    networks:
+      - voip-net
+    restart: unless-stopped
+
+  listener:
+    build:
+      context: ./listener
+      dockerfile: Dockerfile
+    container_name: listener
+    networks:
+      - voip-net
+    volumes:
+      - ./listener/listener.py:/app/listener.py
+    depends_on:
+      - redis
+      - asterisk1
+      - asterisk2      
+    restart: unless-stopped
+
+networks:
+  voip-net:
+    driver: bridge
