@@ -19,54 +19,86 @@ services:
       - "5060:5060/tcp"
     volumes:
       - ./kamailio/kamailio.cfg:/etc/kamailio/kamailio.cfg:ro
-      - ./kamailio/dispatcher.list:/etc/kamailio/dispatcher.list
-      - ./kamailio/update_reg_redis.lua:/etc/kamailio/update_reg_redis.lua:ro
+      - ./kamailio/dispatcher.list:/etc/kamailio/dispatcher.list            
+      - ./kamailio/update_states.py:/etc/kamailio/update_states.py:ro            
+      - ./kamailio/init.sh:/etc/kamailio/init.sh:ro
+      - ./kamailio/aliases.cfg:/etc/kamailio/aliases.cfg:ro
     networks:
       - voip-net
     depends_on:
       - redis      
-    restart: unless-stopped
-    command: kamailio -m 512 -M 32 -f /etc/kamailio/kamailio.cfg
+    restart: unless-stopped    
 
   asterisk1:
     build:
-      context: ./asterisk1
+      context: ./asterisk
       dockerfile: Dockerfile        
     container_name: asterisk1
+    ports:
+      - "10000-10010:10000-10010/udp"    
     volumes:
-      - ./asterisk1/asterisk.conf:/etc/asterisk/asterisk.conf
-      - ./asterisk1/extensions.conf:/etc/asterisk/extensions.conf
-      - ./asterisk1/modules.conf:/etc/asterisk/modules.conf
-      - ./asterisk1/pjsip.conf:/etc/asterisk/pjsip.conf
-      - ./asterisk1/manager.conf:/etc/asterisk/manager.conf
+      - ./asterisk/asterisk.conf:/etc/asterisk/asterisk.conf
+      - ./asterisk/extensions.conf:/etc/asterisk/extensions.conf
+      - ./asterisk/modules.conf:/etc/asterisk/modules.conf
+      - ./asterisk/pjsip.conf:/etc/asterisk/pjsip.conf
+      - ./asterisk/manager.conf:/etc/asterisk/manager.conf
+      - ./asterisk/musiconhold.conf:/etc/asterisk/musiconhold.conf      
+      - ./asterisk/rtp.conf.asterisk1:/etc/asterisk/rtp.conf            
+      - ./asterisk/queues.conf:/etc/asterisk/queues.conf        
     networks:
       - voip-net
     restart: unless-stopped
 
   asterisk2:
     build:
-      context: ./asterisk2
+      context: ./asterisk
       dockerfile: Dockerfile        
     container_name: asterisk2
+    ports:
+      - "10011-10020:10011-10020/udp"        
     volumes:
-      - ./asterisk2/asterisk.conf:/etc/asterisk/asterisk.conf
-      - ./asterisk2/extensions.conf:/etc/asterisk/extensions.conf
-      - ./asterisk2/modules.conf:/etc/asterisk/modules.conf
-      - ./asterisk2/pjsip.conf:/etc/asterisk/pjsip.conf
-      - ./asterisk2/manager.conf:/etc/asterisk/manager.conf
+      - ./asterisk/asterisk.conf:/etc/asterisk/asterisk.conf
+      - ./asterisk/extensions.conf:/etc/asterisk/extensions.conf
+      - ./asterisk/modules.conf:/etc/asterisk/modules.conf
+      - ./asterisk/pjsip.conf:/etc/asterisk/pjsip.conf
+      - ./asterisk/manager.conf:/etc/asterisk/manager.conf
+      - ./asterisk/musiconhold.conf:/etc/asterisk/musiconhold.conf
+      - ./asterisk/rtp.conf.asterisk2:/etc/asterisk/rtp.conf  
+      - ./asterisk/queues.conf:/etc/asterisk/queues.conf                              
     networks:
       - voip-net
     restart: unless-stopped
 
-  listener:
+  listener1:
     build:
       context: ./listener
       dockerfile: Dockerfile
-    container_name: listener
+    container_name: listener1
     networks:
       - voip-net
     volumes:
       - ./listener/listener.py:/app/listener.py
+    environment:
+      - ASTERISK_SERVER=asterisk1      
+      - PYTHONUNBUFFERED=1      
+    depends_on:
+      - redis
+      - asterisk1
+      - asterisk2      
+    restart: unless-stopped
+
+  listener2:
+    build:
+      context: ./listener
+      dockerfile: Dockerfile
+    container_name: listener2
+    networks:
+      - voip-net
+    volumes:
+      - ./listener/listener.py:/app/listener.py
+    environment:
+      - ASTERISK_SERVER=asterisk2
+      - PYTHONUNBUFFERED=1
     depends_on:
       - redis
       - asterisk1

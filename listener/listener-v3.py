@@ -1,8 +1,8 @@
 import asyncio
 import json
 import redis.asyncio as redis
+from asterisk.ami import AMIClient, SimpleAction
 import os
-from panoramisk import Manager
 
 r = redis.Redis(host='redis', port=6379, decode_responses=True)
 
@@ -10,50 +10,27 @@ AMI_HOST = os.getenv('ASTERISK_SERVER', '127.0.0.1')
 AMI_USER = os.getenv('ASTERISK_USER', 'admin')
 AMI_PASS = os.getenv('ASTERISK_PASS', 'admin')
 
-manager = None
+ami = None
 
-# 🔒 controle de concorrência
+# 🔥 LIMITE DE CONCORRÊNCIA
 semaphore = asyncio.Semaphore(20)
 
-# 🔒 evita múltiplas sincronizações simultâneas
-sync_running = False
 
-
-# ---------------- AMI (PANORAMISK) ----------------
-
-def handle_login(mngr: Manager):
-    global sync_running
-
-    print("🔁 AMI conectado/reconectado!", flush=True)
-
-    if sync_running:
-        print("⏳ Sync já em execução, ignorando...", flush=True)
-        return
-
-    sync_running = True
-
-    try:        
-        asyncio.create_task(sync_states_from_redis())
-    finally:
-        sync_running = False
+# ---------------- AMI ----------------
 
 async def connect_ami():
-    global manager    
+    global ami
 
     while True:
         try:
-            print("🔌 Conectando no AMI (Panoramisk)...", flush=True)
-
-            manager = Manager(
-                host=AMI_HOST,
-                port=5038,
-                username=AMI_USER,
-                secret=AMI_PASS
-            )
-            manager.on_login = handle_login
-            await manager.connect()
+            print("🔌 Conectando no AMI...", flush=True)
+            ami = AMIClient(address=AMI_HOST, port=5038)
+            ami.login(username=AMI_USER, secret=AMI_PASS)
 
             print("✅ Conectado ao AMI!", flush=True)
+
+            asyncio.create_task(sync_states_from_redis())
+
             return
 
         except Exception as e:
@@ -62,7 +39,7 @@ async def connect_ami():
 
 
 async def ami_send(tenant, extension, status):
-    global manager
+    global ami
 
     try:
         if status == "registered":
@@ -74,16 +51,26 @@ async def ami_send(tenant, extension, status):
 
         custom = f"REG-{tenant}-{extension}"
 
-        response = await manager.send_action({
-            "Action": "Setvar",
-            "Variable": f"DEVICE_STATE(Custom:{custom})",
-            "Value": state
-        })
+        action = SimpleAction(
+            'Setvar',
+            Variable=f"DEVICE_STATE(Custom:{custom})",
+            Value=state
+        )
 
-        print(f"✓ Custom:{custom} = {state} | {response}", flush=True)
+        future = ami.send_action(action)
+
+        #asyncio.create_task(handle_ami_response(future, custom, state))
 
     except Exception as e:
         print(f"✗ Erro AMI: {e}", flush=True)
+
+
+async def handle_ami_response(future, custom, state):
+    try:
+        response = future.response
+        print(f"✓ Custom:{custom} = {state} | {response}", flush=True)
+    except Exception as e:
+        print(f"Erro resposta AMI: {e}", flush=True)
 
 
 # ---------------- REDIS STATE ----------------
@@ -167,7 +154,7 @@ async def sync_states_from_redis():
 # ---------------- EVENT PROCESSOR ----------------
 
 async def process_event(msg):
-    async with semaphore:
+    async with semaphore:  # 🔥 CONTROLE DE CONCORRÊNCIA
         try:
             data = json.loads(msg['data'])
             tenant = data['tenant']
