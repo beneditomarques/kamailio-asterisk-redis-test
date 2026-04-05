@@ -2,25 +2,15 @@ import asyncio
 import json
 import redis.asyncio as redis
 import os
-from panoramisk import Manager, Message
+from panoramisk import Manager
 
-REDIS_SERVER = 'redis'
-r = redis.Redis(host=REDIS_SERVER, port=6379, decode_responses=True)
+r = redis.Redis(host='redis', port=6379, decode_responses=True)
 
 AMI_HOST = os.getenv('ASTERISK_SERVER', '127.0.0.1')
 AMI_USER = os.getenv('ASTERISK_USER', 'admin')
 AMI_PASS = os.getenv('ASTERISK_PASS', 'admin')
 
-# Variables
-manager = Manager(
-    host=AMI_HOST,
-    port=5038,
-    username=AMI_USER,
-    secret=AMI_PASS,
-    ping_delay=10,  # Delay after start
-    ping_interval=30,  # Periodically ping AMI (dead or alive)
-    reconnect_timeout=2,  # Timeout reconnect if connection lost
-)
+manager = None
 
 # 🔒 controle de concorrência
 semaphore = asyncio.Semaphore(20)
@@ -53,6 +43,13 @@ async def connect_ami():
     while True:
         try:
             print("🔌 Conectando no AMI (Panoramisk)...", flush=True)
+
+            manager = Manager(
+                host=AMI_HOST,
+                port=5038,
+                username=AMI_USER,
+                secret=AMI_PASS
+            )
             manager.on_login = handle_login
             await manager.connect()
 
@@ -68,18 +65,22 @@ async def ami_send(tenant, extension, status):
     global manager
 
     try:
-        state = {
-            "registered": "NOT_INUSE",
-            "not_registered": "UNAVAILABLE",
-        }.get(status, status)
+        if status == "registered":
+            state = "NOT_INUSE"
+        elif status in ["not_registered", "NA"]:
+            state = "UNAVAILABLE"
+        else:
+            state = status
+
+        custom = f"REG-{tenant}-{extension}"
 
         response = await manager.send_action({
             "Action": "Setvar",
-            "Variable": f"DEVICE_STATE(Custom:{extension}.{tenant})",
+            "Variable": f"DEVICE_STATE(Custom:{custom})",
             "Value": state
         })
 
-        print(f"✓ Tenant: {tenant}, Hint: 'Custom:{extension}.{tenant}' = {state} | {response}", flush=True)
+        print(f"✓ Custom:{custom} = {state} | {response}", flush=True)
 
     except Exception as e:
         print(f"✗ Erro AMI: {e}", flush=True)
@@ -142,9 +143,13 @@ async def sync_states_from_redis():
 
                 try:
                     data = json.loads(value)
-                    extension = key.split(":")[3]
-                    tenant = key.split(":")[1]
+
+                    parts = key.split(":")
+                    tenant = parts[1]
+                    extension = parts[3]
+
                     state = data.get("state", "UNKNOWN")
+
                     asyncio.create_task(ami_send(tenant, extension, state))
 
                 except Exception as e:
@@ -166,7 +171,7 @@ async def process_event(msg):
         try:
             data = json.loads(msg['data'])
             tenant = data['tenant']
-            ext = data['extension'].split('.',1)[0]
+            ext = data['extension']
 
             if msg['channel'] == 'voice_cache:registry-changes':
                 status = data['status']
@@ -177,49 +182,22 @@ async def process_event(msg):
                     ext,
                     registered=registered
                 )
+
                 asyncio.create_task(ami_send(tenant, ext, status))
 
             elif msg['channel'] == 'voice_cache:peerstate-changes':
                 new_state = data['new_state']
 
-                if data["asterisk_id"] != os.environ['ASTERISK_SERVER']:
-                    await update_device_state(
-                        tenant,
-                        ext,
-                        state=new_state
-                    )
-                    asyncio.create_task(ami_send(tenant, ext, new_state))
+                await update_device_state(
+                    tenant,
+                    ext,
+                    state=new_state
+                )
+
+                asyncio.create_task(ami_send(tenant, ext, new_state))
 
         except Exception as e:
             print("Erro processamento:", e, flush=True)
-
-
-@manager.register_event('DeviceStateChange')
-async def ami_callback(mngr: Manager, msg: Message):
-    data = json.dumps(dict(msg.items()),indent=4)
-    dict_message_event = json.loads(data)
-    device_type = "Custom" if "Custom" in dict_message_event["Device"] else "Native"
-    if device_type == "Native":
-        peer      = dict_message_event["Device"].split('/',1)[1].split('.',1)[0]
-        tenant    = dict_message_event["Device"].split('/',1)[1].split('.',1)[1]
-        new_state = dict_message_event["State"]
-        event_dict = {
-            "event": "peerstate_update",
-            "tenant": tenant,
-            "extension": peer,
-            "old_state": '??',            
-            "new_state": new_state,            
-            "timestamp": float(dict_message_event["Timestamp"]),
-            "asterisk_id": dict_message_event["SystemName"]
-        }
-        
-        # separators=(',', ':') remove todos os espaços em branco do JSON
-        event_json = json.dumps(event_dict, separators=(',', ':'))
-
-        # PUBLISH
-        result = await r.publish("voice_cache:peerstate-changes", f"{event_json}")          
-        print(f"REDIS MESSAGE PUBLISHED: {event_dict}, RESULT: {result}, EXTENSION STATUS UPDATED: {dict_message_event}")
-    
 
 
 # ---------------- LISTENER ----------------

@@ -34,8 +34,9 @@ services:
       context: ./asterisk
       dockerfile: Dockerfile        
     container_name: asterisk1
+    hostname: asterisk1  
     ports:
-      - "10000-10010:10000-10010/udp"    
+      - "10000-10010:10000-10010/udp"  
     volumes:
       - ./asterisk/asterisk.conf:/etc/asterisk/asterisk.conf
       - ./asterisk/extensions.conf:/etc/asterisk/extensions.conf
@@ -54,8 +55,9 @@ services:
       context: ./asterisk
       dockerfile: Dockerfile        
     container_name: asterisk2
+    hostname: asterisk2     
     ports:
-      - "10011-10020:10011-10020/udp"        
+      - "10011-10020:10011-10020/udp"  
     volumes:
       - ./asterisk/asterisk.conf:/etc/asterisk/asterisk.conf
       - ./asterisk/extensions.conf:/etc/asterisk/extensions.conf
